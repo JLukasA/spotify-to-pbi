@@ -1,0 +1,1 @@
+Small ongoing project. Using Spotipy library to extract data regarding my own listening habits and store it in a SQLite database. Plan to expand project; add some data transformations, create different cubes/frames for analysis, use it to practice Power BI skills.
