@@ -1,8 +1,3 @@
-(line 76) save index if track_id not in existing_track_ids, 
-if in existing_track_ids, get features from DB and append to row
-
-Timestamps - should use played_at instead of timestamps when checking overlap
-
 silver layer - transform data
 
 Change different times from UNIX to UTC
@@ -17,3 +12,7 @@ larger trends in songs over time?
 
 
 Dont have everything in main, separate it to different files, looks better. One bronze, one silver, one gold maybe? then a main to run it, select table to turn into excel file to port to Power BI.
+
+
+
+spotify audio features deprecated, look up soundcharts instead.
