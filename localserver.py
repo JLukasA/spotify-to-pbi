@@ -26,7 +26,6 @@ class RedirectHandler(BaseHTTPRequestHandler):
 
 
 def run_server(server_address):
-    server_address  # Match the redirect URI
     httpd = HTTPServer(server_address, RedirectHandler)
     print(f"Server running at {server_address}")
     httpd.handle_request()  # Handle one request and then stop
