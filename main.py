@@ -47,79 +47,55 @@ def validate_data(df: pd.DataFrame) -> bool:
 
 def process_data(sp: spotipy.Spotify, tracks, existing_tracks_dict) -> pd.DataFrame:
     """ Process the downloaded spotify data before database upload. Initializes empty lists of all features that will be saved.
-        Loops through the tracks and appends already downloaded information (song/artist/album name, time played at, duration, url, etc). 
-        For not yet downloaded information (sp.audio_features()), check database for information before making further API calls for unavailable 
-        information."""
+        Two loops: first one through all tracks to extract/append available information. Second loop through all artists to add
+        corresponding genres to """
     song_name_list, artist_name_list, featured_artist_list = [], [], []
     genre_list, album_name_list = [], []
     duration_list, release_date_list, played_at_list, dates_list = [], [], [], []
-    spotify_url_list, track_id_list, artist_id_list = [], [], []
-
-    danceability_list, energy_list, liveness_list, loudness_list = [], [], [], []
-    speechiness_list, tempo_list, valence_list = [], [], []
-
-    new_track_ids, new_track_idx = [], []
-
+    spotify_url_list, track_id_list = [], []
+    artist_id_list = []
+    missing_ids = []
+    # first loop - append available information and create artist_id_list for a second API call
     for idx, song in enumerate(tracks["items"]):
-        track = song["track"]
-        track_id = track["id"]
+        track = song.get("track", {})
+        track_id = track.get("id")
+        if not track_id:  # Skip if track_id is missing
+            missing_ids.append(idx)
+            print(f"NO TRACK ID FOR SONG {song}!!! WARNING WARNING WARNING")
+            continue
         track_id_list.append(track_id)
-        played_at_list.append(song["played_at"])
-        dates_list.append(song["played_at"].split("T")[0])
-        song_name_list.append(track["name"])
-        album_name_list.append(track["album"]["name"])
-        duration_list.append(round(track["duration_ms"] / 1000))
-        release_date_list.append(track["album"]["release_date"])
+        played_at_list.append(song.get("played_at"))
+        dates_list.append(song.get("played_at", "").split("T")[0])
+        song_name_list.append(track.get("name"))
+        album_name_list.append(track.get("album", {}).get("name"))
+        duration_list.append(round(track.get("duration_ms", 0) / 1000))
+        release_date_list.append(track.get("album", {}).get("release_date"))
+        spotify_url_list.append(track.get("external_urls", {}).get("spotify"))
 
-        spotify_url_list.append(track["external_urls"]["spotify"])
-        artist_id_list.append(track["artists"][0]["id"])
-
-        artist_names = [artist["name"] for artist in track["artists"]]
-        artist_name_list.append(artist_names[0])
+        # Handle artists
+        artists = track.get("artists", [])
+        artist_names = [artist.get("name") for artist in artists]
+        artist_name_list.append(artist_names[0] if artist_names else "")  # Default to empty string if no artists
         featured_artist_list.append(", ".join(artist_names[1:]) if len(artist_names) > 1 else "")
+        artist_id_list.append(artists[0].get("id") if artists else "")  # Default to empty string if no artists
 
-        # check if song data is available
-        # if so, fetch audio features from DB instead of making API call
-        if track_id in existing_tracks_dict:
-            temp_track = existing_tracks_dict[track_id]
-            genre_list.append(temp_track["genre"])
-            danceability_list.append(temp_track["danceability"])
-            energy_list.append(temp_track["energy"])
-            liveness_list.append(temp_track["liveness"])
-            loudness_list.append(temp_track["loudness"])
-            speechiness_list.append(temp_track["speechiness"])
-            tempo_list.append(temp_track["tempo"])
-            valence_list.append(temp_track["valence"])
+    # API call number two: get artist information
+    # store in dict, use id to get information (genre, might extract more information since audio features isn't working.)
 
-        # if not available, add to list of tracks to make calls for
-        # save index to insert information at the correct place in list
-        else:
-            new_track_ids.append(track_id)
-            new_track_idx.append(idx)
-
-    # for all songs not avaiable
-    if new_track_ids:
-        artist_id_list = [track["artists"][0]["id"] for track in tracks["items"] if track["track"]["id"] in new_track_ids]
-        unique_artist_ids = list(set(artist_id_list))
+    unique_artist_ids = list(set(artist_id_list))
+    try:
         artist_info_list = sp.artists(unique_artist_ids)["artists"]
         artist_info_dict = {artist["id"]: artist for artist in artist_info_list}
-        audio_features = sp.audio_features(new_track_ids)
+    except spotipy.exceptions.SpotifyException as e:
+        print(f"Error fetching artist information: {e}")
+        artist_info_dict = {}
 
-        for idx, track_id in enumerate(new_track_ids):
-            id = artist_id_list[idx]
-            artist_info = artist_info_dict.get(id)
-            genre = ", ".join(artist_info.get("genres", [])) if artist_info else ""
-            genre_list.append(genre)
-            track_features = audio_features[idx]
-            if track_features:
-                danceability_list.append(track_features.get("danceability"))
-                energy_list.append(track_features.get("energy"))
-                liveness_list.append(track_features.get("liveness"))
-                loudness_list.append(track_features.get("loudness"))
-                speechiness_list.append(track_features.get("speechiness"))
-                tempo_list.append(track_features.get("tempo"))
-                valence_list.append(track_features.get("valence"))
+    for id in artist_id_list:
+        artist_info = artist_info_dict.get(id)
+        genre = ", ".join(artist_info.get("genres", [])) if artist_info else ""
+        genre_list.append(genre)
 
+    # Create DataFrame
     data = {
         "played_at": played_at_list,
         "date": dates_list,
@@ -130,13 +106,6 @@ def process_data(sp: spotipy.Spotify, tracks, existing_tracks_dict) -> pd.DataFr
         "genre": genre_list,
         "release_date": release_date_list,
         "duration_sec": duration_list,
-        "danceability": danceability_list,
-        "valence": valence_list,
-        "speechiness": speechiness_list,
-        "energy": energy_list,
-        "tempo": tempo_list,
-        "liveness": liveness_list,
-        "loudness": loudness_list,
         "track_id": track_id_list,
         "artist_id": artist_id_list,
         "spotify_url": spotify_url_list
@@ -150,16 +119,9 @@ def get_database_tracks(s: str):
     """ Fetch track features of tracks already available in the database instead of using API to get already available information. """
     conn = sqlite3.connect(s)
     cursor = conn.cursor()
-    cursor.execute("SELECT track_id, genre, danceability, energy, liveness, loudness, speechiness, tempo, valence FROM raw_spotify_data GROUP BY track_id")
+    cursor.execute("SELECT track_id, genre FROM raw_spotify_data GROUP BY track_id")
     tracks = {row[0]: {
-        "genre": row[1],
-        "danceability": row[2],
-        "energy": row[3],
-        "liveness": row[4],
-        "loudness": row[5],
-        "speechiness": row[6],
-        "tempo": row[7],
-        "valence": row[8]
+        "genre": row[1]
     }
         for row in cursor.fetchall()
     }
@@ -183,18 +145,11 @@ def initialize_database(s: str):
             genre TEXT,
             release_date TEXT,
             duration_sec INTEGER,
-            danceability REAL,
-            valence REAL,
-            speechiness REAL,
-            energy REAL,
-            tempo REAL,
-            liveness REAL,
-            loudness REAL,
             track_id TEXT,
             artist_id TEXT,
             spotify_url TEXT
-        )
-""")
+            )
+                   """)
     conn.commit()
     conn.close()
 

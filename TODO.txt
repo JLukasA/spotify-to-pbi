@@ -16,3 +16,5 @@ Dont have everything in main, separate it to different files, looks better. One 
 
 
 spotify audio features deprecated, look up soundcharts instead.
+https://musicbrainz.org/doc/MusicBrainz_API
+https://www.theaudiodb.com/api_guide.php
