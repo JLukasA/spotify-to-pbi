@@ -34,21 +34,13 @@ def validate_data(df: pd.DataFrame) -> bool:
     else:
         raise Exception("Primary key is not unique")
 
-    # check that all songs are from yesterday
-    # yesterday = datetime.datetime.now() - datetime.timedelta(days=1)
-    # yesterday = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-    # dates = df["date"].tolist()
-    # for date in dates:
-    #    if datetime.datetime.strptime(date, '%Y-%m-%d') != yesterday:
-    #        raise Exception("Not all songs are from yesterday")
-
     return True
 
 
 def process_data(sp: spotipy.Spotify, tracks, existing_tracks_dict) -> pd.DataFrame:
     """ Process the downloaded spotify data before database upload. Initializes empty lists of all features that will be saved.
         Two loops: first one through all tracks to extract/append available information. Second loop through all artists to add
-        corresponding genres to """
+        corresponding genres to the dataframe. """
     song_name_list, artist_name_list, featured_artist_list = [], [], []
     genre_list, album_name_list = [], []
     duration_list, release_date_list, played_at_list, dates_list = [], [], [], []
@@ -177,10 +169,6 @@ if __name__ == "__main__":
     parsed_uri = urlparse(redirect_uri)
     server_address = (parsed_uri.hostname, parsed_uri.port)
     localserver.run_server(server_address)
-
-    # get redirect url
-    # url_response = input("Paste redirect url response Here :  ")
-
     # get token, print info
     if "authorization_code" in localserver.__dict__:
         code = localserver.authorization_code
@@ -197,7 +185,7 @@ if __name__ == "__main__":
         yesterday_unix = int(yesterday.timestamp()) * 1000
 
         # fetch 50 most recently played songs since yesterday
-        recently_played_tracks = sp.current_user_recently_played(limit=10, after=yesterday_unix)
+        recently_played_tracks = sp.current_user_recently_played(limit=50, after=yesterday_unix)
 
         # fetch IDs of songs and artists already in database
         s = DATABASE_LOCATION.replace('sqlite:///', '')
@@ -207,7 +195,8 @@ if __name__ == "__main__":
         # generate a pandas DataFrame of information for the fetched songs
         # only make further API calls if songs not available in database
         df = process_data(sp, recently_played_tracks, existing_tracks)
-        earliest_timestamp, latest_timestamp = df.iloc[0]["played_at"], df.iloc[-1]["played_at"]
+
+        earliest_timestamp, latest_timestamp = df.iloc[-1]["played_at"], df.iloc[0]["played_at"]
 
         # connect to database
         engine = create_engine(DATABASE_LOCATION)
@@ -221,8 +210,10 @@ if __name__ == "__main__":
         latest_uploaded_timestamp = res[0] if res else None
 
         # if overlaps exist, remove
-        if latest_uploaded_timestamp:
+        if latest_uploaded_timestamp and latest_uploaded_timestamp > latest_timestamp:
+            print(f"Overlap in timestamps, latest uploaded song played at {latest_uploaded_timestamp} and earliest downloaded song played at {earliest_timestamp}.")
             new_data = df[df["played_at"] > latest_uploaded_timestamp]
+            print(f"DataFrame filtered. Out of {len(df.index)}, {len(new_data.index)} songs were played after {latest_uploaded_timestamp} and will be uploaded to the database.")
         else:
             new_data = df
 
