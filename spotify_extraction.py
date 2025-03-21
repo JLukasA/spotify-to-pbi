@@ -39,7 +39,7 @@ def process_data(sp: spotipy.Spotify, tracks) -> pd.DataFrame:
     song_name_list, artist_name_list, featured_artist_list = [], [], []
     genre_list, album_name_list = [], []
     duration_list, release_date_list, played_at_list, dates_list = [], [], [], []
-    spotify_url_list, track_id_list = [], []
+    spotify_url_list, track_id_list, isrc_list = [], [], []
     artist_id_list = []
     missing_ids = []
     # first loop - append available information and create artist_id_list for a second API call
@@ -58,6 +58,7 @@ def process_data(sp: spotipy.Spotify, tracks) -> pd.DataFrame:
         duration_list.append(round(track.get("duration_ms", 0) / 1000))
         release_date_list.append(track.get("album", {}).get("release_date"))
         spotify_url_list.append(track.get("external_urls", {}).get("spotify"))
+        isrc_list.append(track.get("external_ids", {}).get("isrc"))
 
         # Handle artists
         artists = track.get("artists", [])
@@ -95,7 +96,8 @@ def process_data(sp: spotipy.Spotify, tracks) -> pd.DataFrame:
         "duration_sec": duration_list,
         "track_id": track_id_list,
         "artist_id": artist_id_list,
-        "spotify_url": spotify_url_list
+        "spotify_url": spotify_url_list,
+        "isrc": isrc_list
     }
 
     df = pd.DataFrame(data)
@@ -134,7 +136,8 @@ def initialize_database(s: str):
             duration_sec INTEGER,
             track_id TEXT,
             artist_id TEXT,
-            spotify_url TEXT
+            spotify_url TEXT,
+            isrc TEXT
             )
                    """)
     conn.commit()
@@ -219,18 +222,24 @@ def upload_data(df: pd.DataFrame, db_loc):
 
     # sort songs by time played and try to upload to database, then close connetion
     new_data = new_data.sort_values(by="played_at", ascending=True)
+
     try:
         new_data.to_sql('raw_spotify_data', engine, index=False, if_exists='append')
         print(f"Data loaded successfully. {len(new_data.index)} songs were uploaded, played between {new_data.iloc[0]["played_at"]} and {new_data.iloc[-1]["played_at"]}.")
+        song_list = new_data[["played_at", "song_name", "artist_name"]]
     except Exception as e:
         print(f"failed to upload to database {s}. Error : {e}")
+        song_list = pd.DataFrame()
     finally:
         conn.close()
+    return song_list
 
 
 def run(db_loc):
-    """ Runs the Spotify data extraction. Establishes a connection to the Spotify API, fetches information about recently played songs, loads it into a pandas DataFrame and uploads that DataFrame to a local SQLite database. """
+    """ Runs the Spotify data extraction. Establishes a connection to the Spotify API, fetches information about recently played songs, loads it into a pandas DataFrame
+      and uploads that DataFrame to a local SQLite database. Returns a dataframe containing a list of the uploaded songs/artists."""
     sp = establish_spotify_connection()
     recently_played_tracks = extract_spotify_data(sp)
     df = process_data(sp, recently_played_tracks)
-    upload_data(df, db_loc)
+    song_list = upload_data(df, db_loc)
+    return song_list
