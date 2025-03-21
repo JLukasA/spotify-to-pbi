@@ -147,17 +147,17 @@ def initialize_database(s: str):
 def establish_spotify_connection() -> spotipy.Spotify:
     """ Establish connection to Spotify. Uses client id and secret to generate token from local server. """
 
-    print("To get client id, client secret, and redirect URI visit https://developer.spotify.com/dashboard")
-    client_id = input("Enter Client id : ")
-    client_secret = getpass("Enter Client Secret : ")
-    redirect_uri = input("Enter redirect URI: ")
-    scope = "user-read-recently-played"
+    with open("spotify_config.txt", "r") as file:
+        lines = file.read().splitlines()
+        client_id = lines[0]
+        client_secret = lines[1]
+        redirect_uri = lines[2]
 
     # generate SpotifyOAuth manager
     auth_manager = SpotifyOAuth(client_id=client_id,
                                 client_secret=client_secret,
                                 redirect_uri=redirect_uri,
-                                scope=scope)
+                                scope="user-read-recently-played")
 
     # get authorize url
     auth_url = auth_manager.get_authorize_url()
