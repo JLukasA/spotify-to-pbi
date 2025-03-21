@@ -226,13 +226,13 @@ def upload_data(df: pd.DataFrame, db_loc):
     try:
         new_data.to_sql('raw_spotify_data', engine, index=False, if_exists='append')
         print(f"Data loaded successfully. {len(new_data.index)} songs were uploaded, played between {new_data.iloc[0]["played_at"]} and {new_data.iloc[-1]["played_at"]}.")
-        song_list = new_data[["played_at", "song_name", "artist_name"]]
+        isrc_list = new_data[["played_at", "isrc"]]
     except Exception as e:
         print(f"failed to upload to database {s}. Error : {e}")
-        song_list = pd.DataFrame()
+        isrc_list = pd.DataFrame()
     finally:
         conn.close()
-    return song_list
+    return isrc_list
 
 
 def run(db_loc):
@@ -241,5 +241,5 @@ def run(db_loc):
     sp = establish_spotify_connection()
     recently_played_tracks = extract_spotify_data(sp)
     df = process_data(sp, recently_played_tracks)
-    song_list = upload_data(df, db_loc)
-    return song_list
+    isrc_list = upload_data(df, db_loc)
+    return isrc_list

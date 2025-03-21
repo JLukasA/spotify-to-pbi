@@ -10,3 +10,4 @@ if __name__ == "__main__":
     song_df = spotify_extraction.run(DATABASE_LOCATION)
 
     # perform further data extractions
+    acousticbrainz_extraction.run(DATABASE_LOCATION, song_df)
