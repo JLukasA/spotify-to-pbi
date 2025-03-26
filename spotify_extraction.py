@@ -104,7 +104,7 @@ def process_data(sp: spotipy.Spotify, tracks) -> pd.DataFrame:
     return df
 
 
-def get_database_tracks(s: str):
+def get_database_tracks(s: str) -> dict:
     """ Fetch track features of tracks already available in the database instead of using API to get already available information. """
     conn = sqlite3.connect(s)
     cursor = conn.cursor()
@@ -181,7 +181,7 @@ def establish_spotify_connection() -> spotipy.Spotify:
         print("Failed to generate/capture authorization code.")
 
 
-def extract_spotify_data(sp: spotipy.Spotify):
+def extract_spotify_data(sp: spotipy.Spotify) -> dict:
     """ Fetches information about recently played tracks on Spotify. """
 
     today = datetime.datetime.now()
@@ -191,11 +191,13 @@ def extract_spotify_data(sp: spotipy.Spotify):
     # fetch 50 recently played songs
     tracks = sp.current_user_recently_played(limit=50, after=yesterday_unix)
 
+    # print("tracks type:", tracks.__class__, flush=True)
+
     return tracks
 
 
 def upload_data(df: pd.DataFrame, db_loc):
-    """ Established a connection to and uploads the DataFrame to the local SQLite database. """
+    """ Established a connection to and uploads the DataFrame to the local SQLite database."""
 
     # Establish connection to database and initialize table if it doesn't exist
     s = db_loc.replace('sqlite:///', '')

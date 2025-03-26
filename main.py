@@ -6,8 +6,8 @@ DATABASE_LOCATION = "sqlite:///my_tracks.sqlite"
 
 if __name__ == "__main__":
 
-    # run spotify extraction and get a pandas dataframe containing uploaded songs and corresponding artists
+    # run spotify extraction and return a pandas dataframe containing
     song_df = spotify_extraction.run(DATABASE_LOCATION)
 
     # perform further data extractions
-    acousticbrainz_extraction.run(DATABASE_LOCATION, song_df)
+    acousticbrainz_extraction.run(DATABASE_LOCATION)
