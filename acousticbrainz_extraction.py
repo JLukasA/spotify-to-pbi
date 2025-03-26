@@ -27,18 +27,25 @@ def isrc_to_mbid(isrc_list: list) -> list:
     mbid_list = []
     for isrc in isrc_list:
         url = f"https://musicbrainz.org/ws/2/recording/?query=isrc:{isrc}&fmt=json"
-        res = requests.get(url)
 
-        if res.status_code == 200:
-            data = res.json()
-            if data.get("recordings"):
-                mbid_list.append(data["recordings"][0]["id"])
+        while True:
+            res = requests.get(url)
+
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("recordings"):
+                    mbid_list.append(data["recordings"][0]["id"])
+                else:
+                    print(f"No mbid data available for irsc {isrc}.")
+                    mbid_list.append(None)
+                break
+            if res.status_code == 429:
+                print(f"Rate limit exceeded. Pausing until extraction can be resumed.")
+                time.sleep(1)
             else:
+                print(f"Failed fetching mbid. Status code {res.status_code}.")
                 mbid_list.append(None)
-        if res.status_code == 429:
-            # TODO: jump back up to start of this loop after sleeping
-            print(f"Rate limit exceeded. Pausing until extraction can be resumed.")
-            time.sleep(1)
+                break
 
     return mbid_list
 
@@ -54,31 +61,38 @@ def extract_data(mbid_list: str):
     for mbid in mbid_list:
         # extract high-level data
         url_high = f"{AB_API_URL}{mbid}/high-level"
-        res_high = requests.get(url_high)
-        if res_high.status_code == 200:
-            ab_data_high[mbid] = res_high.json()
-        elif res_high.status_code == 429:  # rate limit exceeded
-            # TODO - if rate limit exceeded, sleep 10 sec and make new request? right now it's just sleeping, hit status code 429 so res_high.json() is no good
-            # SAme true for res_low
-            print(f"Rate limit exceeded. Pausing until extraction can be resumed.")
-            time.sleep(10)
-            ab_data_low[mbid] = res_high.json()
-        else:
-            print(f"Failed fetching high-level data. Status code {res_high.status_code}")
-            ab_data_high[mbid] = None
+
+        while True:
+            res_high = requests.get(url_high)
+
+            if res_high.status_code == 200:
+                ab_data_high[mbid] = res_high.json()
+                break
+            elif res_high.status_code == 429:
+                print(f"Rate limit exceeded. Pausing until extraction can be resumed.")
+                time.sleep(10)
+                ab_data_low[mbid] = res_high.json()
+            else:
+                print(f"Failed fetching high-level data. Status code {res_high.status_code}")
+                ab_data_high[mbid] = None
+                break
 
         # extract low-level data
         url_low = f"{AB_API_URL}{mbid}/low-level"
-        res_low = requests.get(url_low)
-        if res_low.status_code == 200:
-            ab_data_low[mbid] = res_low.json()
-        elif res_low.status_code == 429:
-            print(f"Rate limit exceeded. Pausing until extraction can be resumed.")
-            time.sleep(10)
-            ab_data_low[mbid] = res_low.json()
-        else:
-            print(f"Failed fetching low-level data. Status code {res_low.status_code}")
-            ab_data_low[mbid] = None
+
+        while True:
+            res_low = requests.get(url_low)
+            if res_low.status_code == 200:
+                ab_data_low[mbid] = res_low.json()
+                break
+            elif res_low.status_code == 429:
+                print(f"Rate limit exceeded. Pausing until extraction can be resumed.")
+                time.sleep(10)
+                ab_data_low[mbid] = res_low.json()
+            else:
+                print(f"Failed fetching low-level data. Status code {res_low.status_code}")
+                ab_data_low[mbid] = None
+                break
 
     return ab_data_high, ab_data_low
 
