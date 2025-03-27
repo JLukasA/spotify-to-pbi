@@ -35,10 +35,9 @@ def establish_spotify_connection() -> spotipy.Spotify:
     # local server to handle redirect
     parsed_uri = urlparse(redirect_uri)
     server_address = (parsed_uri.hostname, parsed_uri.port)
-    localserver.run_server(server_address)
+    code = localserver.run_server(server_address)
 
-    if "authorization_code" in localserver.__dict__:
-        code = localserver.authorization_code
+    if code:
         token_info = auth_manager.get_access_token(code)
         print("Access Token:", token_info["access_token"])
         print("Refresh Token:", token_info["refresh_token"])
@@ -153,19 +152,19 @@ def initialize_database(engine):
     with engine.connect() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS raw_spotify_data (       
-                played_at TEXT PRIMARY KEY,
-                date TEXT,
-                song_name TEXT,
-                main_artist TEXT,
-                featured_artists TEXT,
-                album_name TEXT,
-                genre TEXT,
-                release_date TEXT,
-                duration_sec INTEGER,
-                track_id TEXT,
-                artist_id TEXT,
-                spotify_url TEXT,
-                isrc TEXT
+                played_at TEXT PRIMARY KEY,         -- timestamp of when song was played
+                date TEXT,                          -- date of when song was played
+                song_name TEXT,                     -- song name
+                main_artist TEXT,                   -- name of artist
+                featured_artists TEXT,              -- names of featured artists, if any
+                album_name TEXT,                    -- name of song album
+                genre TEXT,                         -- artist genre
+                release_date TEXT,                  -- song release date
+                duration_sec INTEGER,               -- song length
+                track_id TEXT,                      -- spotify song id
+                artist_id TEXT,                     -- spotify artist id
+                spotify_url TEXT,                   -- spotify song url
+                isrc TEXT                           -- International Standard Recording Code
                 )
                        """)
         conn.commit()

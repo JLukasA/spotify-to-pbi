@@ -16,8 +16,7 @@ class RedirectHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"Authorization successful! You can close this tab.")
             # Store the code in a global variable or pass it to the main script
-            global authorization_code
-            authorization_code = code
+            self.server.authorization_code = code
         else:
             self.send_response(400)
             self.send_header("Content-type", "text/html")
@@ -29,3 +28,4 @@ def run_server(server_address):
     httpd = HTTPServer(server_address, RedirectHandler)
     print(f"Server running at {server_address}")
     httpd.handle_request()  # Handle one request and then stop
+    return httpd.authorization_code
