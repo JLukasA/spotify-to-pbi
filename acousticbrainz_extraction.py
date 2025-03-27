@@ -16,7 +16,7 @@ def get_missing_isrc(db_loc: str) -> list:
         cursor = conn.cursor()
         cursor.execute("SELECT DISTINCT isrc FROM raw_spotify_data")
         spotify_isrc = {row[0] for row in cursor.fetchall()}
-        cursor.execute("SELECT DISTINCT isrc FROM raw_acousticbrainz_data")
+        cursor.execute("SELECT isrc FROM raw_acousticbrainz_data")
         acousticbrainz_isrc = {row[0] for row in cursor.fetchall()}
         new_isrc = spotify_isrc - acousticbrainz_isrc
         return list(new_isrc)
@@ -52,7 +52,6 @@ def isrc_to_mbid(isrc_list: list) -> list:
 
 def extract_data(mbid_list: str):
     """ Extract high- and low-level metadata about Spotify tracks using the acousticbrainz API. Rate limit 10 requests per 10 seconds. """
-
     ab_data_high = {}
     ab_data_low = {}
     delay = 1
@@ -97,45 +96,81 @@ def extract_data(mbid_list: str):
     return ab_data_high, ab_data_low
 
 
-def process_data(high_level_data: dict, low_level_data: dict) -> pd.DataFrame:
+def process_data(high_level_data: dict, low_level_data: dict, isrc_list: list, mbid_list: list) -> pd.DataFrame:
 
-    data = {
+    data = []
+    for isrc, mbid in zip(isrc_list, mbid_list):
+        if not mbid:
+            continue
+        high = high_level_data.get(mbid, {}).get("highlevel", {})
+        low = low_level_data.get(mbid, {}).get("lowlevel", {})
+        features = {
+            "isrc": isrc,
+            "mbid": mbid,
+            "tempo": low.get("bpm"),
+            "danceability": high.get("danceability", {}).get("value"),
+            "energy": high.get("energy", {}).get("value"),
+            "instrumentality": high.get("voice_instrumental", {}).get("value"),
+            "instrumentality_prob": high.get("voice_instrumental", {}).get("probability"),
+            "gender": high.get("gender", {}).get("value"),
+            "gender_prob": high.get("gender", {}).get("probability"),
+            "intensity": high.get("arousal", {}).get("value"),
+            "valence": high.get("valence", {}).get("value"),
+            "timbre": high.get("timbre", {}).get("value"),
+            "tonality": high.get("tonal_atonal", {}).get("value"),
+            "genre": high.get("genre", {}).get("value"),
+            "genre_prob": high.get("genre", {}).get("probability"),
+            "mood": high.get("mood", {}).get("value"),
+            "key": high.get("key", {}).get("key"),
+        }
 
-    }
+        data.append(features)
+
     df = pd.DataFrame(data)
     return df
-
-
-def initialize_database(s: str):
-    """ Initialize database if it doesn't exist. Needed for first run. """
-
-    conn = sqlite3.connect(s)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS raw_acousticbrainz_data (       
-            played_at TEXT PRIMARY KEY,
-            track_id,
-            tempo,
-            key,
-            scale,
-            mood,
-            genre TEXT,
-            mbid TEXT,
-            isrc TEXT
-            )
-                   """)
-    conn.commit()
-    conn.close()
 
 
 def upload_data(df: pd.DataFrame, db_loc):
     # Establish connection to database and initialize table if it doesn't exist
     s = db_loc.replace('sqlite:///', '')
-    engine = create_engine(db_loc)
-    conn = sqlite3.connect(s)
+    engine = create_engine(engine)
+    initialize_database(engine)
     print(f"Connected to database {s}.")
-    cursor = conn.cursor()
-    initialize_database(s)
+
+    data = pd.DataFrame()
+    try:
+        data.to_sql('raw_acousticbrainz_data', engine, index=False, if_exists='append')
+    except Exception as e:
+        print(f"failed to upload to database {s}. Error : {e}")
+    finally:
+        engine.dispose()
+
+
+def initialize_database(engine):
+    """ Initialize database if it doesn't exist. Needed for first run. """
+    with engine.connect() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS raw_acousticbrainz_data (
+                isrc TEXT PRIMARY KEY NOT NULL,     -- International Standard Recording Code
+                mbid TEXT UNIQUE,                   -- MusicBrainz ID, UUID format                       
+                tempo REAL,                         -- BPM
+                danceability TEXT,                  -- low/medium/high
+                energy TEXT,                        -- low/medium/high
+                instrumentality TEXT,               -- instrumental/voice
+                instrumentality_prob REAL,          -- probability of being instrumental/voice
+                gender TEXT,                        -- male/female
+                gender_prob REAL,                   -- probability of male/female
+                intensity TEXT,                     -- low/medium/high
+                valence TEXT,                       -- positive/negative
+                timbre TEXT,                        -- bright/dark
+                tonality TEXT,                      -- tonal/atonal
+                genre TEXT,                         -- genre
+                genre_prob REAL,                    -- probability of genre
+                mood TEXT,                          -- mood
+                key TEXT                            -- musical key
+                )
+                       """)
+        conn.commit()
 
 
 def run(db_loc):
