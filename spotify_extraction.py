@@ -12,24 +12,55 @@ import localserver
 from urllib.parse import urlparse
 
 
-def validate_data(df: pd.DataFrame) -> bool:
-    """ Quick data validation before uploading to database. """
-    # check if empty
-    if df.empty:
-        print("DataFrame is empty, no songs were downloaded.")
-        return False  # not necessarily error, can have not listened to songs, therefore don't raise exception
+def establish_spotify_connection() -> spotipy.Spotify:
+    """ Establish connection to Spotify. Uses client id and secret to generate token from local server. """
 
-    # check for null values
-    if df.isnull().values.any():
-        raise Exception("DataFrame contains null values")
+    with open("spotify_config.txt", "r") as file:
+        lines = file.read().splitlines()
+        client_id = lines[0]
+        client_secret = lines[1]
+        redirect_uri = lines[2]
 
-    # primary key constraint
-    if pd.Series(df['played_at']).is_unique:
-        pass
+    # generate SpotifyOAuth manager
+    auth_manager = SpotifyOAuth(client_id=client_id,
+                                client_secret=client_secret,
+                                redirect_uri=redirect_uri,
+                                scope="user-read-recently-played")
+
+    # get authorize url
+    auth_url = auth_manager.get_authorize_url()
+    print("Open link: ", auth_url)
+
+    # local server to handle redirect
+    parsed_uri = urlparse(redirect_uri)
+    server_address = (parsed_uri.hostname, parsed_uri.port)
+    localserver.run_server(server_address)
+
+    if "authorization_code" in localserver.__dict__:
+        code = localserver.authorization_code
+        token_info = auth_manager.get_access_token(code)
+        print("Access Token:", token_info["access_token"])
+        print("Refresh Token:", token_info["refresh_token"])
+
+        # Initialize Spotify client
+        sp = spotipy.Spotify(auth_manager=auth_manager)
+        return sp
     else:
-        raise Exception("Primary key is not unique")
+        print("Failed to generate/capture authorization code.")
 
-    return True
+
+def extract_spotify_data(sp: spotipy.Spotify) -> dict:
+    """ Fetches information about recently played tracks on Spotify. """
+
+    today = datetime.datetime.now(datetime.timezone.utc)
+    yesterday_unix = int((today - datetime.timedelta(days=1)).timestamp() * 1000)
+
+    # fetch up to 50 recently played songs
+    tracks = sp.current_user_recently_played(limit=50, after=yesterday_unix)
+
+    # print("tracks type:", tracks.__class__, flush=True)
+
+    return tracks
 
 
 def process_data(sp: spotipy.Spotify, tracks) -> pd.DataFrame:
@@ -70,7 +101,7 @@ def process_data(sp: spotipy.Spotify, tracks) -> pd.DataFrame:
     # API call number two: get artist information
     # store in dict, use id to get information (genre, might extract more information since audio features isn't working.)
 
-    unique_artist_ids = list(set(artist_id_list))
+    unique_artist_ids = [id for id in set(artist_id_list) if id]
     try:
         artist_info_list = sp.artists(unique_artist_ids)["artists"]
         artist_info_dict = {artist["id"]: artist for artist in artist_info_list}
@@ -118,99 +149,48 @@ def get_database_tracks(s: str) -> dict:
     return tracks
 
 
-def initialize_database(s: str):
+def initialize_database(db_loc: str):
     """ Initialize database if it doesn't exist. Needed for first run. """
 
-    conn = sqlite3.connect(s)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS raw_spotify_data (       
-            played_at TEXT PRIMARY KEY,
-            date TEXT,
-            song_name TEXT,
-            main_artist TEXT,
-            featured_artists TEXT,
-            album_name TEXT,
-            genre TEXT,
-            release_date TEXT,
-            duration_sec INTEGER,
-            track_id TEXT,
-            artist_id TEXT,
-            spotify_url TEXT,
-            isrc TEXT
-            )
-                   """)
-    conn.commit()
-    conn.close()
-
-
-def establish_spotify_connection() -> spotipy.Spotify:
-    """ Establish connection to Spotify. Uses client id and secret to generate token from local server. """
-
-    with open("spotify_config.txt", "r") as file:
-        lines = file.read().splitlines()
-        client_id = lines[0]
-        client_secret = lines[1]
-        redirect_uri = lines[2]
-
-    # generate SpotifyOAuth manager
-    auth_manager = SpotifyOAuth(client_id=client_id,
-                                client_secret=client_secret,
-                                redirect_uri=redirect_uri,
-                                scope="user-read-recently-played")
-
-    # get authorize url
-    auth_url = auth_manager.get_authorize_url()
-    print("Open link: ", auth_url)
-
-    # local server to handle redirect
-    parsed_uri = urlparse(redirect_uri)
-    server_address = (parsed_uri.hostname, parsed_uri.port)
-    localserver.run_server(server_address)
-
-    if "authorization_code" in localserver.__dict__:
-        code = localserver.authorization_code
-        token_info = auth_manager.get_access_token(code)
-        print("Access Token:", token_info["access_token"])
-        print("Refresh Token:", token_info["refresh_token"])
-
-        # Initialize Spotify client
-        sp = spotipy.Spotify(auth_manager=auth_manager)
-        return sp
-    else:
-        print("Failed to generate/capture authorization code.")
-
-
-def extract_spotify_data(sp: spotipy.Spotify) -> dict:
-    """ Fetches information about recently played tracks on Spotify. """
-
-    today = datetime.datetime.now()
-    yesterday = today - datetime.timedelta(days=1)
-    yesterday_unix = int(yesterday.timestamp()) * 1000
-
-    # fetch 50 recently played songs
-    tracks = sp.current_user_recently_played(limit=50, after=yesterday_unix)
-
-    # print("tracks type:", tracks.__class__, flush=True)
-
-    return tracks
+    with sqlite3.connect(db_loc) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS raw_spotify_data (       
+                played_at TEXT PRIMARY KEY,
+                date TEXT,
+                song_name TEXT,
+                main_artist TEXT,
+                featured_artists TEXT,
+                album_name TEXT,
+                genre TEXT,
+                release_date TEXT,
+                duration_sec INTEGER,
+                track_id TEXT,
+                artist_id TEXT,
+                spotify_url TEXT,
+                isrc TEXT
+                )
+                       """)
 
 
 def upload_data(df: pd.DataFrame, db_loc):
     """ Established a connection to and uploads the DataFrame to the local SQLite database."""
 
+    if df.empty:
+        print("DataFrame is empty, no data to upload.")
+        return
+
     # Establish connection to database and initialize table if it doesn't exist
     s = db_loc.replace('sqlite:///', '')
-    engine = create_engine(db_loc)
-    conn = sqlite3.connect(s)
-    print(f"Connected to database {s}.")
-    cursor = conn.cursor()
     initialize_database(s)
+    engine = create_engine(db_loc)
+    print(f"Connected to database {s}.")
 
     # check timestamps of already uploaded data
-    cursor.execute("SELECT played_at FROM raw_spotify_data ORDER BY played_at DESC LIMIT 1")
-    res = cursor.fetchone()
-    latest_uploaded_timestamp = res[0] if res else None
+    with engine.connect() as conn:
+        res = conn.execute("SELECT played_at FROM raw_spotify_data ORDER BY played_at DESC LIMIT 1")
+        timestamp = res.fetchone()
+        latest_uploaded_timestamp = timestamp[0] if timestamp else None
 
     earliest_timestamp, latest_timestamp = df.iloc[-1]["played_at"], df.iloc[0]["played_at"]
 
@@ -222,19 +202,38 @@ def upload_data(df: pd.DataFrame, db_loc):
     else:
         new_data = df
 
-    # sort songs by time played and try to upload to database, then close connetion
+    # sort songs by time played, validate, and try to upload to database, then close connetion
     new_data = new_data.sort_values(by="played_at", ascending=True)
+
+    if not validate_data(new_data):
+        print(f"Data did not pass validation.")
+        return
 
     try:
         new_data.to_sql('raw_spotify_data', engine, index=False, if_exists='append')
         print(f"Data loaded successfully. {len(new_data.index)} songs were uploaded, played between {new_data.iloc[0]["played_at"]} and {new_data.iloc[-1]["played_at"]}.")
-        isrc_list = new_data[["played_at", "isrc"]]
     except Exception as e:
         print(f"failed to upload to database {s}. Error : {e}")
-        isrc_list = pd.DataFrame()
-    finally:
-        conn.close()
-    return isrc_list
+
+
+def validate_data(df: pd.DataFrame) -> bool:
+    """ Quick data validation before uploading to database. """
+    # check if empty
+    if df.empty:
+        print("DataFrame is empty, no songs were downloaded.")
+        return False  # not necessarily error, can have not listened to songs, therefore don't raise exception
+
+    # check for null values
+    # if df.isnull().values.any():
+    #    raise Exception("DataFrame contains null values")
+
+    # primary key constraint
+    if pd.Series(df['played_at']).is_unique:
+        pass
+    else:
+        raise Exception("Primary key is not unique")
+
+    return True
 
 
 def run(db_loc):
@@ -243,5 +242,4 @@ def run(db_loc):
     sp = establish_spotify_connection()
     recently_played_tracks = extract_spotify_data(sp)
     df = process_data(sp, recently_played_tracks)
-    isrc_list = upload_data(df, db_loc)
-    return isrc_list
+    upload_data(df, db_loc)

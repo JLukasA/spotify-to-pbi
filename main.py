@@ -1,13 +1,12 @@
 import spotify_extraction
 import acousticbrainz_extraction
-import pandas as pd
-DATABASE_LOCATION = "sqlite:///my_tracks.sqlite"
 
+DATABASE_LOCATION = "sqlite:///my_tracks.sqlite"
 
 if __name__ == "__main__":
 
     # run spotify extraction and return a pandas dataframe containing
-    song_df = spotify_extraction.run(DATABASE_LOCATION)
+    spotify_extraction.run(DATABASE_LOCATION)
 
-    # perform further data extractions
+    # perform further metadata extractions
     acousticbrainz_extraction.run(DATABASE_LOCATION)
