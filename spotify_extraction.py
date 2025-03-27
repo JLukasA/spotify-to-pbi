@@ -1,6 +1,7 @@
 import pandas as pd
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, exc
+from sqlalchemy.engine import Engine
 from getpass import getpass
 from datetime import datetime
 import datetime
@@ -135,26 +136,22 @@ def process_data(sp: spotipy.Spotify, tracks) -> pd.DataFrame:
     return df
 
 
-def get_database_tracks(s: str) -> dict:
+def get_database_tracks(engine) -> dict:
     """ Fetch track features of tracks already available in the database instead of using API to get already available information. """
-    conn = sqlite3.connect(s)
-    cursor = conn.cursor()
-    cursor.execute("SELECT track_id, genre FROM raw_spotify_data GROUP BY track_id")
-    tracks = {row[0]: {
-        "genre": row[1]
-    }
-        for row in cursor.fetchall()
-    }
-    conn.close()
-    return tracks
+    tracks = {}
+    try:
+        with engine.connect() as conn:
+            res = conn.execute("SELECT track_id, genre FROM raw_spotify_data GROUP BY track_id")
+            tracks = {row.track_id: {"genre": row.genre} for row in res}
+            return tracks
+    except exc.SQLAlchemyError as e:
+        print(f"Database error: {e}.")
 
 
-def initialize_database(db_loc: str):
+def initialize_database(engine):
     """ Initialize database if it doesn't exist. Needed for first run. """
-
-    with sqlite3.connect(db_loc) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
+    with engine.connect() as conn:
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS raw_spotify_data (       
                 played_at TEXT PRIMARY KEY,
                 date TEXT,
@@ -171,19 +168,19 @@ def initialize_database(db_loc: str):
                 isrc TEXT
                 )
                        """)
+        conn.commit()
 
 
 def upload_data(df: pd.DataFrame, db_loc):
-    """ Established a connection to and uploads the DataFrame to the local SQLite database."""
-
+    """ Establishes a connection to and uploads the DataFrame to the local SQLite database."""
     if df.empty:
         print("DataFrame is empty, no data to upload.")
         return
 
     # Establish connection to database and initialize table if it doesn't exist
     s = db_loc.replace('sqlite:///', '')
-    initialize_database(s)
     engine = create_engine(db_loc)
+    initialize_database(engine)
     print(f"Connected to database {s}.")
 
     # check timestamps of already uploaded data
@@ -214,6 +211,8 @@ def upload_data(df: pd.DataFrame, db_loc):
         print(f"Data loaded successfully. {len(new_data.index)} songs were uploaded, played between {new_data.iloc[0]["played_at"]} and {new_data.iloc[-1]["played_at"]}.")
     except Exception as e:
         print(f"failed to upload to database {s}. Error : {e}")
+    finally:
+        engine.dispose()
 
 
 def validate_data(df: pd.DataFrame) -> bool:
