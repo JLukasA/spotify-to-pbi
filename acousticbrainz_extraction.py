@@ -11,7 +11,7 @@ from typing import Optional
 AB_API_URL = "https://acousticbrainz.org/api/v1/"
 
 
-def initialize_databases(engine):
+def initialize_databases(engine) -> None:
     """ Initialize databases if it doesn't exist. Needed for first run. """
     with engine.connect() as conn:
         conn.execute("""
@@ -171,7 +171,7 @@ def process_data(high_level_data: dict[str, dict], low_level_data: dict[str, dic
     return df
 
 
-def upload_data(acousticbrainz_df: pd.DataFrame, failed_isrc: list[str], engine):
+def upload_data(acousticbrainz_df: pd.DataFrame, failed_isrc: list[str], engine) -> None:
     """ Uploads acousticbrainz data and obsolete ISRC to the local database. """
 
     try:
@@ -191,7 +191,7 @@ def upload_data(acousticbrainz_df: pd.DataFrame, failed_isrc: list[str], engine)
         raise
 
 
-def run(db_loc):
+def run(db_loc) -> None:
     engine = create_engine(db_loc)
     try:
         initialize_databases(engine)

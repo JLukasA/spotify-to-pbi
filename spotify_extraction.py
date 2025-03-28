@@ -11,6 +11,7 @@ from spotipy.oauth2 import SpotifyOAuth
 import json
 import localserver
 from urllib.parse import urlparse
+from typing import Any
 
 
 def establish_spotify_connection() -> spotipy.Spotify:
@@ -49,7 +50,7 @@ def establish_spotify_connection() -> spotipy.Spotify:
         print("Failed to generate/capture authorization code.")
 
 
-def extract_spotify_data(sp: spotipy.Spotify) -> dict:
+def extract_spotify_data(sp: spotipy.Spotify) -> dict[str, Any]:
     """ Fetches information about recently played tracks on Spotify. """
 
     today = datetime.datetime.now(datetime.timezone.utc)
@@ -63,7 +64,7 @@ def extract_spotify_data(sp: spotipy.Spotify) -> dict:
     return tracks
 
 
-def process_data(sp: spotipy.Spotify, tracks) -> pd.DataFrame:
+def process_data(sp: spotipy.Spotify, tracks: dict[str, Any]) -> pd.DataFrame:
     """ Process the downloaded spotify data before database upload. Initializes empty lists of all features that will be saved.
         Two loops: first one through all tracks to extract/append available information. Second loop through all artists to add
         corresponding genres to the dataframe. """
@@ -135,7 +136,7 @@ def process_data(sp: spotipy.Spotify, tracks) -> pd.DataFrame:
     return df
 
 
-def get_database_tracks(engine) -> dict:
+def get_database_tracks(engine) -> dict[str, dict[str, str]]:
     """ Fetch track features of tracks already available in the database instead of using API to get already available information. """
     tracks = {}
     try:
@@ -147,7 +148,7 @@ def get_database_tracks(engine) -> dict:
         print(f"Database error: {e}.")
 
 
-def initialize_database(engine):
+def initialize_database(engine) -> None:
     """ Initialize database if it doesn't exist. Needed for first run. """
     with engine.connect() as conn:
         conn.execute("""
@@ -170,7 +171,7 @@ def initialize_database(engine):
         conn.commit()
 
 
-def upload_data(df: pd.DataFrame, db_loc):
+def upload_data(df: pd.DataFrame, db_loc) -> None:
     """ Establishes a connection to and uploads the DataFrame to the local SQLite database."""
     if df.empty:
         print("DataFrame is empty, no data to upload.")
@@ -234,7 +235,7 @@ def validate_data(df: pd.DataFrame) -> bool:
     return True
 
 
-def run(db_loc):
+def run(db_loc) -> None:
     """ Runs the Spotify data extraction. Establishes a connection to the Spotify API, fetches information about recently played songs, loads it into a pandas DataFrame
       and uploads that DataFrame to a local SQLite database. Returns a dataframe containing a list of the uploaded songs/artists."""
     sp = establish_spotify_connection()
