@@ -6,25 +6,66 @@ import datetime
 import sqlite3
 import requests
 import time
+from typing import Optional
 
 AB_API_URL = "https://acousticbrainz.org/api/v1/"
 
 
-def get_missing_isrc(db_loc: str) -> list:
-    """ Returns a list containing ISRC of songs in the spotify table that is not in the acousticbrainz table. """
-    with sqlite3.connect(db_loc) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT isrc FROM raw_spotify_data")
-        spotify_isrc = {row[0] for row in cursor.fetchall()}
-        cursor.execute("SELECT isrc FROM raw_acousticbrainz_data")
-        acousticbrainz_isrc = {row[0] for row in cursor.fetchall()}
-        new_isrc = spotify_isrc - acousticbrainz_isrc
+def initialize_databases(engine):
+    """ Initialize databases if it doesn't exist. Needed for first run. """
+    with engine.connect() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS raw_acousticbrainz_data (
+                isrc TEXT PRIMARY KEY NOT NULL,     -- International Standard Recording Code
+                mbid TEXT UNIQUE,                   -- MusicBrainz ID, UUID format                       
+                tempo REAL,                         -- BPM
+                danceability TEXT,                  -- low/medium/high
+                energy TEXT,                        -- low/medium/high
+                instrumentality TEXT,               -- instrumental/voice
+                instrumentality_prob REAL,          -- probability of being instrumental/voice
+                gender TEXT,                        -- male/female
+                gender_prob REAL,                   -- probability of male/female
+                intensity TEXT,                     -- low/medium/high
+                valence TEXT,                       -- positive/negative
+                timbre TEXT,                        -- bright/dark
+                tonality TEXT,                      -- tonal/atonal
+                genre TEXT,                         -- genre
+                genre_prob REAL,                    -- probability of genre
+                mood TEXT,                          -- mood
+                key TEXT                            -- musical key
+                    )
+                       """)
+        conn.commit()
+        conn.execute(""" CREATE TABLE IF NOT EXISTS failed_isrcs(
+                     isrc TEXT PRIMARY KEY,                             -- International Standard Recording Code
+                     last_attempt TIMESTAMP DEFAULT CURRENT TIMESTAMP   -- timestamp of fetching attempt 
+                     )
+                      """)
+        conn.commit()
+    engine.dispose()
+
+
+def get_missing_isrc(engine) -> list[str]:
+    """ Returns a list containing ISRC of songs in the spotify table that is neither in the acousticbrainz table, nor has it unsuccessfully been used to fetch MBIDs. """
+    with engine.connect() as conn:
+        res = conn.execute(""" 
+                              SELECT s.isrc 
+                              FROM raw_spotify_data s
+                              LEFT JOIN raw_acousticbrainz_data a on s.isrc = a.isrc
+                              LEFT JOIN failed_isrc_mappings f on s.isrc = f.isrc
+                              WHERE a.isrc IS NULL
+                              AND f.isrc IS NULL
+                              and s.isrc IS NOT NULL
+                              GROUP BY s.isrc
+                              """)
+        new_isrc = {row.isrc for row in res.fetchall()}
         return list(new_isrc)
 
 
-def isrc_to_mbid(isrc_list: list) -> list:
-    """ Fetch mbid from musicbrainz to use to fetch data from acousticbrainz. Rate limit 300 requests per second. """
+def isrc_to_mbid(isrc_list: list[str]) -> tuple[list[Optional[str]], list[str]]:
+    """ Fetch mbid from musicbrainz to use to fetch data from acousticbrainz. Rate limit 300 requests per second. If no mbid available, return isrc in separate list. """
     mbid_list = []
+    failed_conversion_list = []
     for isrc in isrc_list:
         url = f"https://musicbrainz.org/ws/2/recording/?query=isrc:{isrc}&fmt=json"
 
@@ -37,6 +78,7 @@ def isrc_to_mbid(isrc_list: list) -> list:
                     mbid_list.append(data["recordings"][0]["id"])
                 else:
                     print(f"No mbid data available for irsc {isrc}.")
+                    failed_conversion_list.append(isrc)
                     mbid_list.append(None)
                 break
             if res.status_code == 429:
@@ -44,19 +86,17 @@ def isrc_to_mbid(isrc_list: list) -> list:
                 time.sleep(1)
             else:
                 print(f"Failed fetching mbid. Status code {res.status_code}.")
+                failed_conversion_list.append(isrc)
                 mbid_list.append(None)
                 break
 
-    return mbid_list
+    return mbid_list, failed_conversion_list
 
 
-def extract_data(mbid_list: str):
+def extract_data(mbid_list: list[str]) -> tuple[dict[str, dict], dict[str, dict]]:
     """ Extract high- and low-level metadata about Spotify tracks using the acousticbrainz API. Rate limit 10 requests per 10 seconds. """
     ab_data_high = {}
     ab_data_low = {}
-    delay = 1
-    request_counter = 1
-    start_time = time.time()
     for mbid in mbid_list:
         # extract high-level data
         url_high = f"{AB_API_URL}{mbid}/high-level"
@@ -96,11 +136,12 @@ def extract_data(mbid_list: str):
     return ab_data_high, ab_data_low
 
 
-def process_data(high_level_data: dict, low_level_data: dict, isrc_list: list, mbid_list: list) -> pd.DataFrame:
+def process_data(high_level_data: dict[str, dict], low_level_data: dict[str, dict], isrc_list: list[str], mbid_list: list[str]) -> pd.DataFrame:
 
     data = []
     for isrc, mbid in zip(isrc_list, mbid_list):
         if not mbid:
+            print(f"no MBID for ISRC {isrc}")
             continue
         high = high_level_data.get(mbid, {}).get("highlevel", {})
         low = low_level_data.get(mbid, {}).get("lowlevel", {})
@@ -130,52 +171,36 @@ def process_data(high_level_data: dict, low_level_data: dict, isrc_list: list, m
     return df
 
 
-def upload_data(df: pd.DataFrame, db_loc):
-    # Establish connection to database and initialize table if it doesn't exist
-    s = db_loc.replace('sqlite:///', '')
-    engine = create_engine(engine)
-    initialize_database(engine)
-    print(f"Connected to database {s}.")
+def upload_data(acousticbrainz_df: pd.DataFrame, failed_isrc: list[str], engine):
+    """ Uploads acousticbrainz data and obsolete ISRC to the local database. """
 
-    data = pd.DataFrame()
     try:
-        data.to_sql('raw_acousticbrainz_data', engine, index=False, if_exists='append')
+        with engine.begin() as conn:
+            if not acousticbrainz_df.empty:
+                acousticbrainz_df.to_sql('raw_acousticbrainz_data', con=conn, index=False, if_exists='append')
+                print(f"Uploaded acoustricbrainz metadata for {len(acousticbrainz_df.index)} songs.")
+            if failed_isrc:
+                failed_isrc_df = pd.DataFrame({
+                    'isrc': failed_isrc,
+                    'last_attempt': pd.Timestamp.utcnow()
+                })
+                failed_isrc_df.to_sql('failed_isrc', con=conn, index=False, if_exists='append')
+                print(f"Uploaded {len(failed_isrc)} ISRC's of songs with no corresponding MBID.")
     except Exception as e:
-        print(f"failed to upload to database {s}. Error : {e}")
-    finally:
-        engine.dispose()
-
-
-def initialize_database(engine):
-    """ Initialize database if it doesn't exist. Needed for first run. """
-    with engine.connect() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS raw_acousticbrainz_data (
-                isrc TEXT PRIMARY KEY NOT NULL,     -- International Standard Recording Code
-                mbid TEXT UNIQUE,                   -- MusicBrainz ID, UUID format                       
-                tempo REAL,                         -- BPM
-                danceability TEXT,                  -- low/medium/high
-                energy TEXT,                        -- low/medium/high
-                instrumentality TEXT,               -- instrumental/voice
-                instrumentality_prob REAL,          -- probability of being instrumental/voice
-                gender TEXT,                        -- male/female
-                gender_prob REAL,                   -- probability of male/female
-                intensity TEXT,                     -- low/medium/high
-                valence TEXT,                       -- positive/negative
-                timbre TEXT,                        -- bright/dark
-                tonality TEXT,                      -- tonal/atonal
-                genre TEXT,                         -- genre
-                genre_prob REAL,                    -- probability of genre
-                mood TEXT,                          -- mood
-                key TEXT                            -- musical key
-                )
-                       """)
-        conn.commit()
+        print(f"failed to upload to database. Error : {e}")
+        raise
 
 
 def run(db_loc):
-    isrc = get_missing_isrc(db_loc)
-    mbid = isrc_to_mbid(isrc)
-    high, low = extract_data(mbid)
-    df = process_data(high, low)
-    upload_data(df, db_loc)
+    engine = create_engine(db_loc)
+    try:
+        initialize_databases(engine)
+        isrc = get_missing_isrc(engine)
+        mbid, failed_isrc = isrc_to_mbid(isrc)
+        high, low = extract_data(mbid)
+        df = process_data(high, low)
+        upload_data(df, failed_isrc, engine)
+    except Exception as e:
+        print(f"Pipeline failure : {e}.")
+    finally:
+        engine.dispose()
