@@ -1,20 +1,32 @@
 import pandas as pd
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 from datetime import datetime
 import datetime
 import sqlite3
 import requests
 import time
 from typing import Optional
+from urllib.parse import quote
+from tqdm import tqdm
 
+with open("musicbrainz_config.txt", "r") as file:
+    lines = file.read().splitlines()
+    app_name = lines[0]
+    email = lines[1]
+user_agent = f"{app_name} ({email})"
+HEADERS = {
+    'User-Agent': user_agent,
+    'Accept': 'application/json'
+}
 AB_API_URL = "https://acousticbrainz.org/api/v1/"
 
 
-def initialize_databases(engine) -> None:
+def initialize_databases(engine: Engine) -> None:
     """ Initialize databases if it doesn't exist. Needed for first run. """
-    with engine.connect() as conn:
-        conn.execute("""
+    with engine.begin() as conn:
+        query1 = text("""
             CREATE TABLE IF NOT EXISTS raw_acousticbrainz_data (
                 isrc TEXT PRIMARY KEY NOT NULL,     -- International Standard Recording Code
                 mbid TEXT UNIQUE,                   -- MusicBrainz ID, UUID format                       
@@ -35,114 +47,147 @@ def initialize_databases(engine) -> None:
                 key TEXT                            -- musical key
                     )
                        """)
-        conn.commit()
-        conn.execute(""" CREATE TABLE IF NOT EXISTS failed_isrcs(
+        conn.execute(query1)
+        query2 = text(""" CREATE TABLE IF NOT EXISTS failed_isrcs(
                      isrc TEXT PRIMARY KEY,                             -- International Standard Recording Code
-                     last_attempt TIMESTAMP DEFAULT CURRENT TIMESTAMP   -- timestamp of fetching attempt 
+                     last_attempt TIMESTAMP DEFAULT CURRENT_TIMESTAMP   -- timestamp of fetching attempt 
                      )
                       """)
-        conn.commit()
-    engine.dispose()
+        conn.execute(query2)
+        query3 = text(""" CREATE TABLE IF NOT EXISTS invalid_mbids(
+                     mbid TEXT PRIMARY KEY,                             -- Musicbrainz ID
+                     isrc TEXT,                                         -- International Standard Recording Code
+                     last_attempt TIMESTAMP DEFAULT CURRENT_TIMESTAMP   -- timestamp of fetching attempt 
+                     )
+                      """)
+        conn.execute(query3)
 
 
-def get_missing_isrc(engine) -> list[str]:
+def get_missing_isrc(engine: Engine) -> list[str]:
     """ Returns a list containing ISRC of songs in the spotify table that is neither in the acousticbrainz table, nor has it unsuccessfully been used to fetch MBIDs. """
-    with engine.connect() as conn:
-        res = conn.execute(""" 
+    with engine.begin() as conn:
+        query = text(""" 
                               SELECT s.isrc 
                               FROM raw_spotify_data s
                               LEFT JOIN raw_acousticbrainz_data a on s.isrc = a.isrc
-                              LEFT JOIN failed_isrc_mappings f on s.isrc = f.isrc
+                              LEFT JOIN failed_isrcs f on s.isrc = f.isrc
+                              LEFT JOIN invalid_mbids m on s.isrc = m.isrc
                               WHERE a.isrc IS NULL
                               AND f.isrc IS NULL
+                              AND m.isrc IS NULL
                               and s.isrc IS NOT NULL
                               GROUP BY s.isrc
                               """)
+        res = conn.execute(query)
         new_isrc = {row.isrc for row in res.fetchall()}
         return list(new_isrc)
 
 
-def isrc_to_mbid(isrc_list: list[str]) -> tuple[list[Optional[str]], list[str]]:
+def isrc_to_mbid(isrc_list: list[str]) -> tuple[list[Optional[str]], list[str], dict[str, str]]:
     """ Fetch mbid from musicbrainz to use to fetch data from acousticbrainz. Rate limit 300 requests per second. If no mbid available, return isrc in separate list. """
+    print(f"starting process of fetching Musicbrainz IDs using ISRC. should take approximately {len(isrc_list)} seconds.")
     mbid_list = []
     failed_conversion_list = []
-    for isrc in isrc_list:
-        url = f"https://musicbrainz.org/ws/2/recording/?query=isrc:{isrc}&fmt=json"
+    mbid_to_isrc = {}
+    for isrc in tqdm(isrc_list, desc="parsing ISRCs"):
+        url = f"https://musicbrainz.org/ws/2/recording/?query=isrc:{quote(isrc)}&fmt=json"
 
         while True:
-            res = requests.get(url)
-
-            if res.status_code == 200:
-                data = res.json()
+            response = requests.get(url, headers=HEADERS, timeout=10)
+            time.sleep(1)
+            if response.status_code == 200:
+                data = response.json()
                 if data.get("recordings"):
-                    mbid_list.append(data["recordings"][0]["id"])
+                    # print(f"Successfully fetched mbid for ISRC {isrc}")
+                    mbid = data["recordings"][0]["id"]
+                    mbid_list.append(mbid)
+                    mbid_to_isrc[mbid] = isrc
                 else:
-                    print(f"No mbid data available for irsc {isrc}.")
+                    # print(f"No mbid data available for irsc {isrc}.")
                     failed_conversion_list.append(isrc)
-                    mbid_list.append(None)
                 break
-            if res.status_code == 429:
+            if response.status_code == 429:
                 print(f"Rate limit exceeded. Pausing until extraction can be resumed.")
                 time.sleep(1)
             else:
-                print(f"Failed fetching mbid. Status code {res.status_code}.")
+                print(f"Failed fetching mbid. Status code {response.status_code}.")
                 failed_conversion_list.append(isrc)
-                mbid_list.append(None)
                 break
 
-    return mbid_list, failed_conversion_list
+    print(f"Process finished. For {len(isrc_list)} ISRCs, MBIDs were found for {len(mbid_list)}, and the extraction failed for {len(failed_conversion_list)}.")
+    return mbid_list, failed_conversion_list, mbid_to_isrc
 
 
-def extract_data(mbid_list: list[str]) -> tuple[dict[str, dict], dict[str, dict]]:
+def extract_data(mbid_list: list[str]) -> tuple[dict[str, dict], dict[str, dict], list[str]]:
     """ Extract high- and low-level metadata about Spotify tracks using the acousticbrainz API. Rate limit 10 requests per 10 seconds. """
+    print("Acousticbrainz data extraction initiated.")
     ab_data_high = {}
     ab_data_low = {}
+    invalid_mbids = []
     for mbid in mbid_list:
+        if not mbid:
+            print("MBID is None, skipping.")
+            continue
         # extract high-level data
         url_high = f"{AB_API_URL}{mbid}/high-level"
 
         while True:
-            res_high = requests.get(url_high)
+            res_high = requests.get(url_high, headers=HEADERS, timeout=10)
 
             if res_high.status_code == 200:
+                # print(f"Success fetching high-level data for mbid {mbid}.")
                 ab_data_high[mbid] = res_high.json()
                 break
             elif res_high.status_code == 429:
-                print(f"Rate limit exceeded. Pausing until extraction can be resumed.")
+                # print(f"Rate limit exceeded. Pausing until extraction can be resumed.")
                 time.sleep(10)
-                ab_data_low[mbid] = res_high.json()
+            elif res_high.status_code == 404:
+                # print(f"No acoustic data found at {url_high}.")
+                invalid_mbids.append(mbid)
+                break
             else:
-                print(f"Failed fetching high-level data. Status code {res_high.status_code}")
-                ab_data_high[mbid] = None
+                # print(f"Failed fetching high-level data. Status code {res_high.status_code}")
                 break
 
         # extract low-level data
         url_low = f"{AB_API_URL}{mbid}/low-level"
 
         while True:
-            res_low = requests.get(url_low)
+            res_low = requests.get(url_low, headers=HEADERS, timeout=10)
             if res_low.status_code == 200:
+                # print(f"Success fetching low-level data for mbid {mbid}.")
                 ab_data_low[mbid] = res_low.json()
                 break
             elif res_low.status_code == 429:
-                print(f"Rate limit exceeded. Pausing until extraction can be resumed.")
+                # print(f"Rate limit exceeded. Pausing until extraction can be resumed.")
                 time.sleep(10)
-                ab_data_low[mbid] = res_low.json()
-            else:
-                print(f"Failed fetching low-level data. Status code {res_low.status_code}")
-                ab_data_low[mbid] = None
+            elif res_low.status_code == 404:
+                # print(f"No acoustic data found at {url_low}.")
+                invalid_mbids.append(mbid)
                 break
+            else:
+                # print(f"Failed fetching low-level data. Status code {res_low.status_code}")
+                break
+    invalid_mbids = list(set(invalid_mbids))
+    print(
+        f"Acousticbrainz data extraction finished. Out of {len(mbid_list)} MBIDs, high-level data was found for {len(ab_data_high)} songs and low-level data was found for {len(ab_data_low)}. {len(invalid_mbids)} invalid MBIDs.")
+    return ab_data_high, ab_data_low, invalid_mbids
 
-    return ab_data_high, ab_data_low
 
-
-def process_data(high_level_data: dict[str, dict], low_level_data: dict[str, dict], isrc_list: list[str], mbid_list: list[str]) -> pd.DataFrame:
+def process_data(high_level_data: dict[str, dict], low_level_data: dict[str, dict], mbid_list: list[str], invalid_mbids: list[str], mbid_to_isrc: dict[str, str]) -> pd.DataFrame:
 
     data = []
-    for isrc, mbid in zip(isrc_list, mbid_list):
+    for mbid in mbid_list:
         if not mbid:
-            print(f"no MBID for ISRC {isrc}")
+            print(f"no MBID for ISRC")
             continue
+        if mbid in invalid_mbids:
+            continue
+        isrc = mbid_to_isrc.get(mbid)
+        if not isrc:
+            print(f"Error with fetching isrc using MBID {mbid}.")
+            continue
+
         high = high_level_data.get(mbid, {}).get("highlevel", {})
         low = low_level_data.get(mbid, {}).get("lowlevel", {})
         features = {
@@ -171,24 +216,36 @@ def process_data(high_level_data: dict[str, dict], low_level_data: dict[str, dic
     return df
 
 
-def upload_data(acousticbrainz_df: pd.DataFrame, failed_isrc: list[str], engine) -> None:
+def upload_data(acousticbrainz_df: pd.DataFrame, failed_isrc: list[str], invalid_mbids: list[str], mbid_to_isrc: dict[str, str], engine: Engine) -> None:
     """ Uploads acousticbrainz data and obsolete ISRC to the local database. """
+    with engine.begin() as conn:
 
-    try:
-        with engine.begin() as conn:
-            if not acousticbrainz_df.empty:
-                acousticbrainz_df.to_sql('raw_acousticbrainz_data', con=conn, index=False, if_exists='append')
-                print(f"Uploaded acoustricbrainz metadata for {len(acousticbrainz_df.index)} songs.")
-            if failed_isrc:
-                failed_isrc_df = pd.DataFrame({
-                    'isrc': failed_isrc,
-                    'last_attempt': pd.Timestamp.utcnow()
-                })
-                failed_isrc_df.to_sql('failed_isrc', con=conn, index=False, if_exists='append')
-                print(f"Uploaded {len(failed_isrc)} ISRC's of songs with no corresponding MBID.")
-    except Exception as e:
-        print(f"failed to upload to database. Error : {e}")
-        raise
+        if not acousticbrainz_df.empty:
+            acousticbrainz_df.to_sql('raw_acousticbrainz_data', con=conn, index=False, if_exists='append')
+            print(f"Uploaded acoustricbrainz metadata for {len(acousticbrainz_df.index)} songs.")
+
+        if failed_isrc:
+            failed_isrc_df = pd.DataFrame({
+                'isrc': failed_isrc,
+                'last_attempt': pd.Timestamp.utcnow()
+            })
+            failed_isrc_df.to_sql('failed_isrc', con=conn, index=False, if_exists='append')
+            print(f"Logged {len(failed_isrc)} Failed ISRCs.")
+
+        if invalid_mbids:
+            invalid_mbid_data = []
+            for mbid in invalid_mbids:
+                if mbid in mbid_to_isrc:
+                    isrc = mbid_to_isrc.get(mbid)
+                    invalid_mbid_data.append({
+                        'mbid': mbid,
+                        'isrc': isrc,
+                        'last_attempt': pd.Timestamp.utcnow()
+                    })
+            if invalid_mbid_data:
+                invalid_mbid_df = pd.DataFrame(invalid_mbid_data)
+                invalid_mbid_df.to_sql('invalid_mbids', con=conn, index=False, if_exists='append')
+                print(f"logged {len(invalid_mbid_data)} failed MBIDs.")
 
 
 def run(db_loc) -> None:
@@ -196,10 +253,13 @@ def run(db_loc) -> None:
     try:
         initialize_databases(engine)
         isrc = get_missing_isrc(engine)
-        mbid, failed_isrc = isrc_to_mbid(isrc)
-        high, low = extract_data(mbid)
-        df = process_data(high, low)
-        upload_data(df, failed_isrc, engine)
+        if not isrc:
+            print("No new records to add to database.")
+            return
+        mbid, failed_isrc, mbid_to_isrc = isrc_to_mbid(isrc)
+        high, low, invalid_mbids = extract_data(mbid)
+        df = process_data(high, low, mbid, invalid_mbids, mbid_to_isrc)
+        upload_data(df, failed_isrc, invalid_mbids, mbid_to_isrc, engine)
     except Exception as e:
         print(f"Pipeline failure : {e}.")
     finally:

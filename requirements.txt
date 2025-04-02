@@ -3,3 +3,4 @@ pandas
 spotipy
 requests
 ipykernel
+tqdm
