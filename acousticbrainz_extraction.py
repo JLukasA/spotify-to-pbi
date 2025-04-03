@@ -66,19 +66,22 @@ def initialize_databases(engine: Engine) -> None:
 def get_missing_isrc(engine: Engine) -> list[str]:
     """ Returns a list containing ISRC of songs in the spotify table that is neither in the acousticbrainz table, nor has it unsuccessfully been used to fetch MBIDs. """
     with engine.begin() as conn:
-        query = text(""" 
-                              SELECT s.isrc 
-                              FROM raw_spotify_data s
-                              LEFT JOIN raw_acousticbrainz_data a on s.isrc = a.isrc
-                              LEFT JOIN failed_isrcs f on s.isrc = f.isrc
-                              LEFT JOIN invalid_mbids m on s.isrc = m.isrc
-                              WHERE a.isrc IS NULL
-                              AND f.isrc IS NULL
-                              AND m.isrc IS NULL
-                              and s.isrc IS NOT NULL
-                              GROUP BY s.isrc
-                              """)
-        res = conn.execute(query)
+        query1 = text("SELECT MAX(played_at) FROM raw_data")
+        latest_processed = conn.execute(query1).scalar()
+
+        query2 = text(""" 
+                SELECT DISTINCT s.isrc 
+                FROM raw_spotify_data s
+                LEFT JOIN raw_acousticbrainz_data a on s.isrc = a.isrc
+                LEFT JOIN failed_isrcs f on s.isrc = f.isrc
+                LEFT JOIN invalid_mbids m on s.isrc = m.isrc
+                WHERE s.isrc IS NOT NULL
+                AND f.isrc IS NULL
+                AND m.isrc IS NULL
+                AND a.isrc IS NULL
+                AND (:latest_processed IS NULL OR s.played_at > :latest_processed)
+                """)
+        res = conn.execute(query2, {"latest_processed": latest_processed})
         new_isrc = {row.isrc for row in res.fetchall()}
         return list(new_isrc)
 
@@ -207,7 +210,7 @@ def process_data(high_level_data: dict[str, dict], low_level_data: dict[str, dic
             "song_genre": high.get("genre", {}).get("value"),
             "genre_prob": high.get("genre", {}).get("probability"),
             "mood": high.get("mood", {}).get("value"),
-            "key": high.get("key", {}).get("key"),
+            "musical_key": high.get("key", {}).get("key"),
         }
 
         data.append(features)
