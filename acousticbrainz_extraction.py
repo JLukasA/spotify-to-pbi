@@ -41,10 +41,10 @@ def initialize_databases(engine: Engine) -> None:
                 valence TEXT,                       -- positive/negative
                 timbre TEXT,                        -- bright/dark
                 tonality TEXT,                      -- tonal/atonal
-                genre TEXT,                         -- genre
+                song_genre TEXT,                         -- genre
                 genre_prob REAL,                    -- probability of genre
                 mood TEXT,                          -- mood
-                key TEXT                            -- musical key
+                musical_key TEXT                            -- musical key
                     )
                        """)
         conn.execute(query1)
@@ -204,7 +204,7 @@ def process_data(high_level_data: dict[str, dict], low_level_data: dict[str, dic
             "valence": high.get("valence", {}).get("value"),
             "timbre": high.get("timbre", {}).get("value"),
             "tonality": high.get("tonal_atonal", {}).get("value"),
-            "genre": high.get("genre", {}).get("value"),
+            "song_genre": high.get("genre", {}).get("value"),
             "genre_prob": high.get("genre", {}).get("probability"),
             "mood": high.get("mood", {}).get("value"),
             "key": high.get("key", {}).get("key"),

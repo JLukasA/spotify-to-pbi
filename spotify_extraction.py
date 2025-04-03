@@ -122,7 +122,7 @@ def process_data(sp: spotipy.Spotify, tracks: dict[str, Any]) -> pd.DataFrame:
         "main_artist": artist_name_list,
         "featured_artists": featured_artist_list,
         "album_name": album_name_list,
-        "genre": genre_list,
+        "artist_genre": genre_list,
         "release_date": release_date_list,
         "duration_sec": duration_list,
         "track_id": track_id_list,
@@ -158,7 +158,7 @@ def initialize_database(engine: Engine) -> None:
                 main_artist TEXT,                   -- name of artist
                 featured_artists TEXT,              -- names of featured artists, if any
                 album_name TEXT,                    -- name of song album
-                genre TEXT,                         -- artist genre
+                artist_genre TEXT,                         -- artist genre
                 release_date TEXT,                  -- song release date
                 duration_sec INTEGER,               -- song length
                 track_id TEXT,                      -- spotify song id
