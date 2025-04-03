@@ -29,22 +29,14 @@ def initialize_databases(engine: Engine) -> None:
         query1 = text("""
             CREATE TABLE IF NOT EXISTS raw_acousticbrainz_data (
                 isrc TEXT PRIMARY KEY NOT NULL,     -- International Standard Recording Code
-                mbid TEXT UNIQUE,                   -- MusicBrainz ID, UUID format                       
-                tempo REAL,                         -- BPM
-                danceability TEXT,                  -- low/medium/high
-                energy TEXT,                        -- low/medium/high
+                mbid TEXT UNIQUE,                   -- MusicBrainz ID, UUID format
+                danceability TEXT,                  -- danceable/not danceable
                 instrumentality TEXT,               -- instrumental/voice
                 instrumentality_prob REAL,          -- probability of being instrumental/voice
                 gender TEXT,                        -- male/female
                 gender_prob REAL,                   -- probability of male/female
-                intensity TEXT,                     -- low/medium/high
-                valence TEXT,                       -- positive/negative
                 timbre TEXT,                        -- bright/dark
                 tonality TEXT,                      -- tonal/atonal
-                song_genre TEXT,                         -- genre
-                genre_prob REAL,                    -- probability of genre
-                mood TEXT,                          -- mood
-                musical_key TEXT                            -- musical key
                     )
                        """)
         conn.execute(query1)
@@ -66,10 +58,7 @@ def initialize_databases(engine: Engine) -> None:
 def get_missing_isrc(engine: Engine) -> list[str]:
     """ Returns a list containing ISRC of songs in the spotify table that is neither in the acousticbrainz table, nor has it unsuccessfully been used to fetch MBIDs. """
     with engine.begin() as conn:
-        query1 = text("SELECT MAX(played_at) FROM raw_data")
-        latest_processed = conn.execute(query1).scalar()
-
-        query2 = text(""" 
+        query = text(""" 
                 SELECT DISTINCT s.isrc 
                 FROM raw_spotify_data s
                 LEFT JOIN raw_acousticbrainz_data a on s.isrc = a.isrc
@@ -79,9 +68,8 @@ def get_missing_isrc(engine: Engine) -> list[str]:
                 AND f.isrc IS NULL
                 AND m.isrc IS NULL
                 AND a.isrc IS NULL
-                AND (:latest_processed IS NULL OR s.played_at > :latest_processed)
                 """)
-        res = conn.execute(query2, {"latest_processed": latest_processed})
+        res = conn.execute(query)
         new_isrc = {row.isrc for row in res.fetchall()}
         return list(new_isrc)
 
@@ -121,30 +109,29 @@ def isrc_to_mbid(isrc_list: list[str]) -> tuple[list[Optional[str]], list[str], 
     return mbid_list, failed_conversion_list, mbid_to_isrc
 
 
-def extract_data(mbid_list: list[str]) -> tuple[dict[str, dict], dict[str, dict], list[str]]:
-    """ Extract high- and low-level metadata about Spotify tracks using the acousticbrainz API. Rate limit 10 requests per 10 seconds. """
+def extract_data(mbid_list: list[str]) -> tuple[dict[str, dict], list[str]]:
+    """ Extract high-level data about Spotify tracks using the acousticbrainz API. Rate limit 10 requests per 10 seconds. """
     print("Acousticbrainz data extraction initiated.")
-    ab_data_high = {}
-    ab_data_low = {}
+    ab_data = {}
     invalid_mbids = []
     for mbid in mbid_list:
         if not mbid:
             print("MBID is None, skipping.")
             continue
         # extract high-level data
-        url_high = f"{AB_API_URL}{mbid}/high-level"
+        url = f"{AB_API_URL}{mbid}/high-level"
 
         while True:
-            res_high = requests.get(url_high, headers=HEADERS, timeout=10)
+            res = requests.get(url, headers=HEADERS, timeout=10)
 
-            if res_high.status_code == 200:
+            if res.status_code == 200:
                 # print(f"Success fetching high-level data for mbid {mbid}.")
-                ab_data_high[mbid] = res_high.json()
+                ab_data[mbid] = res.json()
                 break
-            elif res_high.status_code == 429:
+            elif res.status_code == 429:
                 # print(f"Rate limit exceeded. Pausing until extraction can be resumed.")
                 time.sleep(10)
-            elif res_high.status_code == 404:
+            elif res.status_code == 404:
                 # print(f"No acoustic data found at {url_high}.")
                 invalid_mbids.append(mbid)
                 break
@@ -152,32 +139,13 @@ def extract_data(mbid_list: list[str]) -> tuple[dict[str, dict], dict[str, dict]
                 # print(f"Failed fetching high-level data. Status code {res_high.status_code}")
                 break
 
-        # extract low-level data
-        url_low = f"{AB_API_URL}{mbid}/low-level"
-
-        while True:
-            res_low = requests.get(url_low, headers=HEADERS, timeout=10)
-            if res_low.status_code == 200:
-                # print(f"Success fetching low-level data for mbid {mbid}.")
-                ab_data_low[mbid] = res_low.json()
-                break
-            elif res_low.status_code == 429:
-                # print(f"Rate limit exceeded. Pausing until extraction can be resumed.")
-                time.sleep(10)
-            elif res_low.status_code == 404:
-                # print(f"No acoustic data found at {url_low}.")
-                invalid_mbids.append(mbid)
-                break
-            else:
-                # print(f"Failed fetching low-level data. Status code {res_low.status_code}")
-                break
     invalid_mbids = list(set(invalid_mbids))
     print(
-        f"Acousticbrainz data extraction finished. Out of {len(mbid_list)} MBIDs, high-level data was found for {len(ab_data_high)} songs and low-level data was found for {len(ab_data_low)}. {len(invalid_mbids)} invalid MBIDs.")
-    return ab_data_high, ab_data_low, invalid_mbids
+        f"Acousticbrainz data extraction finished. Out of {len(mbid_list)} MBIDs, data was found for {len(ab_data)}. {len(invalid_mbids)} invalid MBIDs.")
+    return ab_data, invalid_mbids
 
 
-def process_data(high_level_data: dict[str, dict], low_level_data: dict[str, dict], mbid_list: list[str], invalid_mbids: list[str], mbid_to_isrc: dict[str, str]) -> pd.DataFrame:
+def process_data(high_level_data: dict[str, dict], mbid_list: list[str], invalid_mbids: list[str], mbid_to_isrc: dict[str, str]) -> pd.DataFrame:
 
     data = []
     for mbid in mbid_list:
@@ -192,25 +160,16 @@ def process_data(high_level_data: dict[str, dict], low_level_data: dict[str, dic
             continue
 
         high = high_level_data.get(mbid, {}).get("highlevel", {})
-        low = low_level_data.get(mbid, {}).get("lowlevel", {})
         features = {
             "isrc": isrc,
             "mbid": mbid,
-            "tempo": low.get("bpm"),
             "danceability": high.get("danceability", {}).get("value"),
-            "energy": high.get("energy", {}).get("value"),
             "instrumentality": high.get("voice_instrumental", {}).get("value"),
             "instrumentality_prob": high.get("voice_instrumental", {}).get("probability"),
             "gender": high.get("gender", {}).get("value"),
             "gender_prob": high.get("gender", {}).get("probability"),
-            "intensity": high.get("arousal", {}).get("value"),
-            "valence": high.get("valence", {}).get("value"),
             "timbre": high.get("timbre", {}).get("value"),
             "tonality": high.get("tonal_atonal", {}).get("value"),
-            "song_genre": high.get("genre", {}).get("value"),
-            "genre_prob": high.get("genre", {}).get("probability"),
-            "mood": high.get("mood", {}).get("value"),
-            "musical_key": high.get("key", {}).get("key"),
         }
 
         data.append(features)
@@ -232,7 +191,7 @@ def upload_data(acousticbrainz_df: pd.DataFrame, failed_isrc: list[str], invalid
                 'isrc': failed_isrc,
                 'last_attempt': pd.Timestamp.utcnow()
             })
-            failed_isrc_df.to_sql('failed_isrc', con=conn, index=False, if_exists='append')
+            failed_isrc_df.to_sql('failed_isrcs', con=conn, index=False, if_exists='append')
             print(f"Logged {len(failed_isrc)} Failed ISRCs.")
 
         if invalid_mbids:
@@ -260,8 +219,8 @@ def run(db_loc) -> None:
             print("No new records to add to database.")
             return
         mbid, failed_isrc, mbid_to_isrc = isrc_to_mbid(isrc)
-        high, low, invalid_mbids = extract_data(mbid)
-        df = process_data(high, low, mbid, invalid_mbids, mbid_to_isrc)
+        high, invalid_mbids = extract_data(mbid)
+        df = process_data(high, mbid, invalid_mbids, mbid_to_isrc)
         upload_data(df, failed_isrc, invalid_mbids, mbid_to_isrc, engine)
     except Exception as e:
         print(f"Pipeline failure : {e}.")

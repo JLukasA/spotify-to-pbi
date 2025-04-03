@@ -4,3 +4,4 @@ spotipy
 requests
 ipykernel
 tqdm
+openpyxl
