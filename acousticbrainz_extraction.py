@@ -1,10 +1,6 @@
 import pandas as pd
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-from datetime import datetime
-import datetime
-import sqlite3
 import requests
 import time
 from typing import Optional
@@ -36,7 +32,7 @@ def initialize_databases(engine: Engine) -> None:
                 gender TEXT,                        -- male/female
                 gender_prob REAL,                   -- probability of male/female
                 timbre TEXT,                        -- bright/dark
-                tonality TEXT,                      -- tonal/atonal
+                tonality TEXT                       -- tonal/atonal
                     )
                        """)
         conn.execute(query1)
@@ -145,9 +141,9 @@ def extract_data(mbid_list: list[str]) -> tuple[dict[str, dict], list[str]]:
     return ab_data, invalid_mbids
 
 
-def process_data(high_level_data: dict[str, dict], mbid_list: list[str], invalid_mbids: list[str], mbid_to_isrc: dict[str, str]) -> pd.DataFrame:
+def process_data(input_data: dict[str, dict], mbid_list: list[str], invalid_mbids: list[str], mbid_to_isrc: dict[str, str]) -> pd.DataFrame:
 
-    data = []
+    output_data = []
     for mbid in mbid_list:
         if not mbid:
             print(f"no MBID for ISRC")
@@ -159,7 +155,7 @@ def process_data(high_level_data: dict[str, dict], mbid_list: list[str], invalid
             print(f"Error with fetching isrc using MBID {mbid}.")
             continue
 
-        high = high_level_data.get(mbid, {}).get("highlevel", {})
+        high = input_data.get(mbid, {}).get("highlevel", {})
         features = {
             "isrc": isrc,
             "mbid": mbid,
@@ -172,9 +168,9 @@ def process_data(high_level_data: dict[str, dict], mbid_list: list[str], invalid
             "tonality": high.get("tonal_atonal", {}).get("value"),
         }
 
-        data.append(features)
+        output_data.append(features)
 
-    df = pd.DataFrame(data)
+    df = pd.DataFrame(output_data)
     return df
 
 
@@ -216,11 +212,11 @@ def run(db_loc) -> None:
         initialize_databases(engine)
         isrc = get_missing_isrc(engine)
         if not isrc:
-            print("No new records to add to database.")
+            print("No new records to add to database. skipping")
             return
         mbid, failed_isrc, mbid_to_isrc = isrc_to_mbid(isrc)
-        high, invalid_mbids = extract_data(mbid)
-        df = process_data(high, mbid, invalid_mbids, mbid_to_isrc)
+        data, invalid_mbids = extract_data(mbid)
+        df = process_data(data, mbid, invalid_mbids, mbid_to_isrc)
         upload_data(df, failed_isrc, invalid_mbids, mbid_to_isrc, engine)
     except Exception as e:
         print(f"Pipeline failure : {e}.")

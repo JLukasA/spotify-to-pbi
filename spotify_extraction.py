@@ -1,14 +1,11 @@
 import pandas as pd
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine, exc, text
 from sqlalchemy.engine import Engine
 from getpass import getpass
 from datetime import datetime
 import datetime
-import sqlite3
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
-import json
 from urllib.parse import urlparse
 from typing import Any
 import webbrowser
