@@ -120,31 +120,6 @@ def create_brightness_and_danceability_sheet(db_loc: str, output_directory: str 
         df_hourly.to_excel(output_path, index=False)
 
 
-def test_printing(db_loc: str, output_directory: str = "./exports") -> None:
-    os.makedirs(output_directory, exist_ok=True)
-    engine = create_engine(db_loc)
-    with engine.begin() as conn:
-
-        # get data
-        query = text(""" 
-        SELECT TOP 3 *
-        FROM raw_data
-        ORDER BY played_at DESC
-    """)
-        df = pd.read_sql(query, conn)
-
-        # transform
-        # df[''] = df[''].round(2)
-
-        # export to Excel
-        current_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        table_name = "testing"
-        output_path = f"{output_directory}/{table_name}_{current_timestamp}.xlsx"
-        df.to_excel(output_path)
-
-    engine.dispose()
-
-
 def run(db_loc):
     engine = create_engine(db_loc)
     try:
