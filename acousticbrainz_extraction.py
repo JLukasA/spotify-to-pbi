@@ -20,7 +20,7 @@ AB_API_URL = "https://acousticbrainz.org/api/v1/"
 
 
 def initialize_databases(engine: Engine) -> None:
-    """ Initialize databases if it doesn't exist. Needed for first run. """
+    """ Initialize databases if it doesn't exist. """
     with engine.begin() as conn:
         query1 = text("""
             CREATE TABLE IF NOT EXISTS raw_acousticbrainz_data (
@@ -165,7 +165,7 @@ def process_data(input_data: dict[str, dict], mbid_list: list[str], invalid_mbid
             "gender": high.get("gender", {}).get("value"),
             "gender_prob": high.get("gender", {}).get("probability"),
             "timbre": high.get("timbre", {}).get("value"),
-            "tonality": high.get("tonal_atonal", {}).get("value"),
+            "tonality": high.get("tonal_atonal", {}).get("value")
         }
 
         output_data.append(features)
