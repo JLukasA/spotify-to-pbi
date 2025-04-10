@@ -179,8 +179,16 @@ def upload_data(acousticbrainz_df: pd.DataFrame, failed_isrc: list[str], invalid
     with engine.begin() as conn:
 
         if not acousticbrainz_df.empty:
-            acousticbrainz_df.to_sql('raw_acousticbrainz_data', con=conn, index=False, if_exists='append')
-            print(f"Uploaded acoustricbrainz metadata for {len(acousticbrainz_df.index)} songs.")
+            query = text(""" SELECT mbid FROM raw_acousticbrainz_data""")
+            res = conn.execute(query)
+            uploaded_mbids = {row.mbid for row in res}
+            #   filter
+            new_df = acousticbrainz_df[~acousticbrainz_df['mbid'].isin(uploaded_mbids)]
+            if not new_df.empty:
+                new_df.to_sql('raw_acousticbrainz_data', con=conn, index=False, if_exists='append')
+                print(f"Uploaded acoustricbrainz metadata for {len(acousticbrainz_df.index)} songs.")
+            else:
+                print("No songs to upload.")
 
         if failed_isrc:
             failed_isrc_df = pd.DataFrame({
