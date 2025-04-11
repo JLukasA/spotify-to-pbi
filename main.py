@@ -31,5 +31,5 @@ if __name__ == "__main__":
             print("Invalid input. Answer with yes/y or no/n.")
 
     if ans2 in ["YES", "Y"]:
-        sql_operations.create_brightness_and_danceability_hourly_sheet(DATABASE_LOCATION, "./exports")
-        sql_operations.create_spotify_hourly_sheet(DATABASE_LOCATION, "./exports")
+        sql_operations.create_hourly_sheet(DATABASE_LOCATION, "./exports")
+        sql_operations.create_large_sheet(DATABASE_LOCATION, "./exports")
